@@ -11,8 +11,8 @@ from getclasslist import getlist
 
 from models.Resnet3D import resnet18
 # from models.SlowFast import SlowFastNet
-from datasets.hmdb51_dataload import get_dataloader
-# from datasets.class_action_dataload import get_dataloader
+from datasets.dataload import get_dataloader
+
 from log_generator import log_generator
 from torchsummary import summary
 
