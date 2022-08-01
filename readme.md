@@ -2,14 +2,10 @@
 
 文件构架
 ```
+D:.
 ├─.idea
-│  └─inspectionProfiles
 ├─data
-│  ├─class_action
-│  ├─hmdb51
-│  └─ucf101
-│      └─demo
-│          └─__pycache__
+│  └─folder
 ├─datasets
 │  └─__pycache__
 ├─images
@@ -17,6 +13,7 @@
 │  └─__pycache__
 ├─tools
 │  └─__pycache__
+├─utils
 └─work_dir
 ```
 
