@@ -1,15 +1,12 @@
 import argparse
 import sys
 sys.path.append('../')
-import cv2
 import torch
 from PIL.Image import open
 import os
 from torchvideo import transforms
 
-
 from tools.getclasslist import getlist
-from models.resnet3d import Resnet3D_18
 
 
 def get_arg():
@@ -17,19 +14,19 @@ def get_arg():
     parser.add_argument(
         '-pw',
         type=str,
-        default=r'F:\dbas3\jhb\Pytorch-VideoUnderstand-master\Pytorch-VideoUnderstand-master\work_dir\exp-pytorch-VideoUnderstand-master_2022_4_23_1_16\pytorch-VideoUnderstand-master_2022_4_23_1_16.pth',
+        default=r'D:\PythonCode\Pytorch-VideoUnderstand-master\work_dir\exp-hmdb51_resnet50_test_2022_7_9_20_13\checkpoints\best_f1.pth',
         help='the weight applied to predict'
     )
     parser.add_argument(
         '-pv',
         type=str,
-        default=r'F:\dbas3\jhb\Pytorch-VideoUnderstand-master\Pytorch-VideoUnderstand-master\data\ucf101\splitframes\Basketball\v_Basketball_g01_c01',
+        default=r'D:\PythonCode\Pytorch-VideoUnderstand-master\data\hmdb51\split16\brush_hair\April_09_brush_hair_u_nm_np1_ba_goo_0',
         help="prediction video frames' path"
     )
     parser.add_argument(
         '-clsp',
         type=str,
-        default=r'F:\dbas3\jhb\Pytorch-VideoUnderstand-master\Pytorch-VideoUnderstand-master\data\ucf101\classes.txt',
+        default=r'D:\PythonCode\Pytorch-VideoUnderstand-master\data\hmdb51\classes.txt',
         help="classes.txt's path"
     )
     parser.add_argument(
@@ -63,9 +60,8 @@ if torch.cuda.is_available():
 else:
     print("Predict on cpu.")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Resnet3D_18(num_classes=101 )
+model = torch.load(args.pw)
 print("Load weight from the path:{}.".format(args.pw))
-model.load_state_dict(torch.load(args.pw))
 model = model.to(device)
 video_input = video_input.to(device)
 # ----------------------------------------------------------------------------------------------------------------------
@@ -75,6 +71,6 @@ score, prediction = torch.max(output, dim=1)
 pred_class = classes[prediction.reshape((1,))]
 score_value = score.detach().cpu().numpy().tolist()[0]
 # ----------------------------------------------------------------------------------------------------------------------
-print(output)
+print(pred_class, score_value)
 
 
