@@ -31,6 +31,7 @@ def get_confusion_matrix(y_pred, y_label, cls_num, fig_save_dir=None):
     sns.heatmap(data=df)
     if fig_save_dir:
         plt.savefig(fig_save_dir + '/heatmap.svg')
+    plt.close()
     return cmatrix
 
 
@@ -50,6 +51,7 @@ def dataset_distribution(refer_path, cls_path, save_dir=None):
     sns.barplot(data=count_df)
     if save_dir:
         plt.savefig(save_dir + '/dataset_distribution.svg')
+    plt.close()
 
 
 def log_plot(df, save_fig_dir):
@@ -57,21 +59,31 @@ def log_plot(df, save_fig_dir):
     :param df: indicators的dataframe——通过pandas以utf-8编码格式读入
     :param save_fig_dir: 存储路径
     """
+    plt.rcParams['figure.max_open_warning']=5
     sns.set_style("whitegrid")
-    indicators = list(df.columns[2:])
-    data = df.to_numpy()[:, 2:]
-    index = list(df.index)
-    df_ = pd.DataFrame(data=data,index=index,columns=indicators)
     plt.rc('font', family='Times New Roman', size=14)
-    plt.figure(dpi=300,figsize=(4,3))
+    indicators = list(df.columns[1:])
+    # print(indicators)
+    data = df.to_numpy()[:, 1:]
+    index = list(df.index)
+    df_ = pd.DataFrame(data=data, index=index, columns=indicators)
+    plt.ylim(0,1)
+    plt.figure(dpi=300, figsize=(4,3))
     plt.xlabel("Epoch")
     plt.ylabel("Indicator")
     sns.lineplot(data=df_, markers=True)
     plt.savefig(save_fig_dir + '/indicators.svg')
+    plt.close()
 
-    plt.figure(dpi=300,figsize=(4,3))
-    sns.lineplot(data=df,y='Loss',x="Epoch")
+
+def loss_plot(df, save_fig_dir):
+    plt.rcParams['figure.max_open_warning'] = 5
+    sns.set_style("whitegrid")
+    plt.rc('font', family='Times New Roman', size=14)
+    plt.figure(dpi=300, figsize=(4, 3))
+    sns.lineplot(data=df)
     plt.savefig(save_fig_dir + '/loss_epoch.svg')
+    plt.close()
 
 
 def generate_feature(test_frame_dir, resize, model_path, save_dir):

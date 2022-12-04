@@ -55,3 +55,7 @@ def split(src_dir,save_dir,fn_per_video):
             if len(os.listdir(video_frame_path))!=fn_per_video:
                 print(video_frame_path)
                 shutil.rmtree(video_frame_path)
+
+split(r'D:\machine_learning\视频理解论文\dataset\单人视频_old',
+      r'D:\split_video\class_action_64',
+      64)

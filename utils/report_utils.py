@@ -22,9 +22,18 @@ def df_generator(epoches, tags, save_path=None):
     """
     2022/5/24:update Auc and mAP
     """
-    keys = ['Epoch', 'Loss', 'Accuracy', 'Precision', 'Recall', 'F1']
+    keys = ['Epoch', 'Accuracy', 'Precision', 'Recall', 'F1','AUC']
     values = [range(1, epoches + 1)] + tags
     data = dict(zip(keys, values))
+    df = pd.DataFrame(data=data)
+    if save_path:
+        df.to_csv(save_path, encoding='utf-8')
+    return df
+
+
+def loss_df_generator(tags, save_path=None):
+    keys = ['Train_loss','Val_loss']
+    data = dict(zip(keys, tags))
     df = pd.DataFrame(data=data)
     if save_path:
         df.to_csv(save_path, encoding='utf-8')
