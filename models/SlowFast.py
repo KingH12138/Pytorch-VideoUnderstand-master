@@ -1,5 +1,9 @@
 import torch
 import torch.nn as nn
+from models.temporal_attention import Temporal_Attention
+from models.CS_CBAM import CS_CBAM
+from models.CT_CBAM import CT_CBAM
+from models.CBAM_3D import CBAM_3D
 
 
 class Bottleneck(nn.Module):
@@ -23,6 +27,8 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
+        # self.cbam = CT_CBAM(in_channel=planes*4)
+        # self.ta = Temporal_Attention()  ############################################################################################
 
     def forward(self, x):
         residual = x
@@ -38,6 +44,10 @@ class Bottleneck(nn.Module):
         out = self.conv3(out)
         out = self.bn3(out)
 
+        # # #8.3 log:更新了时间注意力机制模块
+        # out = self.ta(out)  ############################################################################################
+        # 8/14:测试slowfast的CBAM-3D
+        # out = self.cbam(out)
         if self.downsample is not None:
             residual = self.downsample(x)
         out += residual
@@ -86,6 +96,16 @@ class SlowFast(nn.Module):
         self.dp = nn.Dropout(dropout)
         self.fc = nn.Linear(self.fast_inplanes + 2048, class_num, bias=False)
         self.soft = nn.Softmax(dim=1)
+        #########################################################################################
+        # self.cscbam1 = CS_CBAM(256)
+        # self.ctcbam1 = CT_CBAM(32)
+        # self.cscbam2 = CS_CBAM(512)
+        # self.ctcbam2 = CT_CBAM(64)
+        # self.cscbam3 = CS_CBAM(1024)
+        # self.ctcbam3 = CT_CBAM(128)
+        # self.cscbam4 = CS_CBAM(2048)
+        # self.ctcbam4 = CT_CBAM(256)
+        #########################################################################################
 
     def forward(self, input):
         fast, lateral = self.FastPath(input[:, :, ::2, :, :])
@@ -102,13 +122,18 @@ class SlowFast(nn.Module):
         x = self.slow_relu(x)
         x = self.slow_maxpool(x)
         x = torch.cat([x, lateral[0]], dim=1)
-        x = self.slow_res2(x)
+        x = self.slow_res2(x)   # 64
+        # 8/14-TA模块与SA和CA模块的搭配验证
+        # x = self.cscbam1(x) #########################################################################################
         x = torch.cat([x, lateral[1]], dim=1)
         x = self.slow_res3(x)
+        # x = self.cscbam2(x) #########################################################################################
         x = torch.cat([x, lateral[2]], dim=1)
         x = self.slow_res4(x)
+        # x = self.cscbam3(x) #########################################################################################
         x = torch.cat([x, lateral[3]], dim=1)
         x = self.slow_res5(x)
+        # x = self.cscbam4(x) #########################################################################################
         x = nn.AdaptiveAvgPool3d(1)(x)
         x = x.view(-1, x.size(1))
         return x
@@ -123,18 +148,23 @@ class SlowFast(nn.Module):
         lateral.append(lateral_p)
 
         res2 = self.fast_res2(pool1)
+
+        # res2 = self.ctcbam1(res2)   #########################################################################################
         lateral_res2 = self.lateral_res2(res2)
         lateral.append(lateral_res2)
 
         res3 = self.fast_res3(res2)
+        # res3 = self.ctcbam2(res3)   #########################################################################################
         lateral_res3 = self.lateral_res3(res3)
         lateral.append(lateral_res3)
 
         res4 = self.fast_res4(res3)
+        # res4 = self.ctcbam3(res4)   #########################################################################################
         lateral_res4 = self.lateral_res4(res4)
         lateral.append(lateral_res4)
 
         res5 = self.fast_res5(res4)
+        # res5 = self.ctcbam4(res5)   #########################################################################################
         x = nn.AdaptiveAvgPool3d(1)(res5)
         x = x.view(-1, x.size(1))
 
@@ -194,14 +224,14 @@ def resnet101(**kwargs):
 
 
 def resnet152(**kwargs):
-    """Constructs a ResNet-101 model.
+    """Constructs a ResNet-152 model.
     """
     model = SlowFast(Bottleneck, [3, 8, 36, 3], **kwargs)
     return model
 
 
 def resnet200(**kwargs):
-    """Constructs a ResNet-101 model.
+    """Constructs a ResNet-200 model.
     """
     model = SlowFast(Bottleneck, [3, 24, 36, 3], **kwargs)
     return model

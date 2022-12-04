@@ -1,10 +1,8 @@
-import math
 from functools import partial
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.temporal_attention import Temporal_Attention
 from models.CT_CBAM import CT_CBAM
 
 
@@ -42,7 +40,7 @@ class BasicBlock(nn.Module):
         self.bn2 = nn.BatchNorm3d(planes)
         self.downsample = downsample
         self.stride = stride
-        # self.ct = CT_CBAM(planes)  ############################################################################################
+        self.ta = CT_CBAM(planes)  ############################################################################################
 
     def forward(self, x):
         residual = x
@@ -54,8 +52,8 @@ class BasicBlock(nn.Module):
         out = self.conv2(out)
         out = self.bn2(out)
 
-        # log:8/10增加了时间注意力机制
-        # out = self.ct(out)  ############################################################################################
+        out = self.ta(out)  ############################################################################################
+
         if self.downsample is not None:
             residual = self.downsample(x)
 
@@ -80,7 +78,7 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        # self.ta = CT_CBAM(planes * self.expansion)  ############################################################################################
+        self.ta = CT_CBAM(planes * self.expansion)  ############################################################################################
 
     def forward(self, x):
         residual = x
@@ -95,8 +93,8 @@ class Bottleneck(nn.Module):
 
         out = self.conv3(out)
         out = self.bn3(out)
-        # log:8/10增加了时间注意力机制
-        # out = self.ta(out)  ############################################################################################
+
+        out = self.ta(out)  ############################################################################################
         if self.downsample is not None:
             residual = self.downsample(x)
 
@@ -118,7 +116,7 @@ class ResNet(nn.Module):
                  no_max_pool=False,
                  shortcut_type='B',
                  widen_factor=1.0,
-                 n_classes=400):
+                 n_classes=4,bs=32):
         super().__init__()
 
         block_inplanes = [int(x * widen_factor) for x in block_inplanes]
@@ -134,6 +132,11 @@ class ResNet(nn.Module):
                                bias=False)
         self.bn1 = nn.BatchNorm3d(self.in_planes)
         self.relu = nn.ReLU(inplace=True)
+        ##############################################################################################################
+        params = torch.ones(size=(4, bs, 1), requires_grad=True)    # 初始化断章机制的权重矩阵
+        self.weight_matrix = nn.Parameter(params)
+        self.sigmoid = nn.Sigmoid()
+        ##############################################################################################################
         self.maxpool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, block_inplanes[0], layers[0],
                                        shortcut_type)
@@ -154,7 +157,10 @@ class ResNet(nn.Module):
                                        stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.fc = nn.Linear(block_inplanes[3] * block.expansion, n_classes)
+        self.fc1 = nn.Linear(64, n_classes)
+        self.fc2 = nn.Linear(128, n_classes)
+        self.fc3 = nn.Linear(256, n_classes)
+        self.fc4 = nn.Linear(512, n_classes)
         self.soft = nn.Softmax(dim=1)
 
         for m in self.modules():
@@ -207,19 +213,45 @@ class ResNet(nn.Module):
         x = self.relu(x)
         if not self.no_max_pool:
             x = self.maxpool(x)
+        # print(x.shape)
+        x1 = self.layer1(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        x2 = self.layer2(x1)
 
-        x = self.avgpool(x)
+        x3 = self.layer3(x2)
 
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        x = self.soft(x)
+        x4 = self.layer4(x3)
+        ##############################################################################################################
+        x1 = self.avgpool(x1)  # b,c,t,h,w->b,c,1,1,1
+        x1 = x1.view(x.size(0), -1)  # b,c,1,1,1->b,c
+        # print(x1.shape)
+        x1 = self.fc1(x1)  # b,n->b,4
+        x1 = self.soft(x1)
+        x1 = x1.unsqueeze(0)    # b,4->1,b,4
 
-        return x
+        x2 = self.avgpool(x2)  # b,c,t,h,w->b,c,1,1,1
+        x2 = x2.view(x2.size(0), -1)  # b,c,1,1,1->b,c
+        x2 = self.fc2(x2)  # b,n->b,4
+        x2 = self.soft(x2)
+        x2 = x2.unsqueeze(0)    # b,4->1,b,4
+
+        x3 = self.avgpool(x3)  # b,c,t,h,w->b,c,1,1,1
+        x3 = x3.view(x3.size(0), -1)  # b,c,1,1,1->b,c
+        x3 = self.fc3(x3)  # b,n->b,4
+        x3 = self.soft(x3)
+        x3 = x3.unsqueeze(0)    # b,4->1,b,4
+
+        x4 = self.avgpool(x4)     # b,c,t,h,w->b,c,1,1,1
+        x4 = x4.view(x.size(0), -1)   # b,c,1,1,1->b,c
+        x4 = self.fc4(x4)  # b,n->b,4
+        x4 = self.soft(x4)
+        x4 = x4.unsqueeze(0)    # b,4->1,b,4
+
+        outputs = torch.cat([x1,x2,x3,x4],dim=0)    #1,b,4->4,b,4
+        outputs = outputs*self.weight_matrix    # 4*b*4 times 4*b*1 = 4*b*4
+        outputs = outputs.sum(dim=0).squeeze(0)
+        ##############################################################################################################
+        return outputs
 
 
 def generate_model(model_depth, **kwargs):
