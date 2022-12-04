@@ -1,22 +1,30 @@
 import argparse
+import os
 import shutil
 from datetime import datetime
 
+import numpy as np
+import torch
+import torchsummary
 from prettytable import PrettyTable
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import Adam,SGD
 
 from data.folder import FolderVideoData
 from datasets.dataload import get_dataloader
 
-# from models.resnet3d_ import generate_model
-from models.SlowFast import resnet50
+# from models.resnet3d_transformer import generate_model
+# from models.resnet_3d_fragment import generate_model
+from models.resnet3d_ import generate_model
+# from models.resnet3d_all import generate_model
+# from models.SlowFast import resnet50,resnet101
 # from models.C3D import C3D
 
 from utils.create_log import logger_get
 from utils.draw_utils import *
-from utils.report_utils import df_generator, torch2onnx
+from utils.report_utils import df_generator, torch2onnx,loss_df_generator
+from utils.save_args import save
 
 
 # 导入参数
@@ -25,7 +33,7 @@ def get_arg():
     parser.add_argument(
         '-t',
         type=str,
-        default='class_action_slowfast_resnet50_16(new_dataset)',
+        default='class_action_resnet18(init)_16',
         help='This is your task theme name'
     )
     parser.add_argument(
@@ -49,19 +57,19 @@ def get_arg():
     parser.add_argument(
         '-tp',
         type=float,
-        default=0.85,
+        default=0.7,
         help="train dataset's percent"
     )
     parser.add_argument(
         '-bs',
         type=int,
-        default=16,
+        default=32,
         help="train dataset's batch size"
     )
     parser.add_argument(
         '-rs',
         type=tuple,
-        default=(224, 224),
+        default=(112, 112),
         help='resized shape of input tensor'
     )
     parser.add_argument(
@@ -73,25 +81,25 @@ def get_arg():
     parser.add_argument(
         '-e',
         type=int,
-        default=25,
+        default=150,
         help='epoch'
     )
     parser.add_argument(
         '-lr',
         type=float,
-        default=0.001,
+        default=0.0001,
         help='learning rate'
     )
     parser.add_argument(
         '-ld',
         type=str,
-        default=r'D:\PythonCode\Pytorch-VideoUnderstand-master\work_dir',
+        default=r'D:\PythonCode\Pytorch-VideoUnderstand-master\work_dir\class_action\init',
         help="the training log's save directory"
     )
     parser.add_argument(
         '-nw',
         type=int,
-        default=8,
+        default=10,
         help="number of workers"
     )
     parser.add_argument(
@@ -144,6 +152,8 @@ if __name__ == '__main__':
     dataset_table = PrettyTable(['number of samples', 'train number', 'valid number', 'percent'], min_table_width=80)
     dataset_table.add_row([samples_num, train_num, valid_num, args.tp])
     file_logger.info("dataset information:\n{}\n".format(dataset_table))
+    # 绘制数据分布图
+    dataset_distribution(args.csvp, args.clsp, log_dir)
     # ----------------------------------------------------------------------------------------------------------------------
     # 类别信息
     classes = source_data.cls_list
@@ -152,21 +162,29 @@ if __name__ == '__main__':
     file_logger.info("Classes information:\n{}\n".format(classes_table))
     # ----------------------------------------------------------------------------------------------------------------------
     # 训练组件配置
-    model = resnet50(class_num=args.cn).to(device)  ##################################################
-    optimizer = Adam(params=model.parameters(), lr=args.lr)  ##################################################
+    # model = torch.load(r'D:\PythonCode\Pytorch-VideoUnderstand-master\work_dir\class_action\transformer\exp_9_10_15_44_class_action_resnet18(trans_early_encoder)_16\checkpoints\last.pth').to(device)
+    model = generate_model(model_depth=18, n_classes=args.cn).to(device)
+    # model = C3D(num_classes=args.cn).to(device)  ##################################################
+    # model = resnet50(class_num=args.cn).to(device)
+    # torchsummary.summary(model=model, input_size=(3, args.sf, *args.rs), batch_size=args.bs)
+    optimizer = Adam(params=model.parameters(), lr=args.lr, weight_decay=1e-5)  ##################################################
     loss_fn = CrossEntropyLoss()  ##################################################
     train_table = PrettyTable(['theme', 'resize', 'batch size', 'epoch', 'learning rate', 'directory of log'],
                               min_table_width=120)
     train_table.add_row([args.t, args.rs, args.bs, args.e, args.lr, args.ld])
+    # 保存训练参数表
+    save(args,os.path.join(log_dir, 'args.yaml'))
     file_logger.info('Train information:\n{}\n'.format(train_table))
     # ----------------------------------------------------------------------------------------------------------------------
     # 开始训练
     file_logger.info("Train begins......")
     losses = []
+    val_losses = []
     accuracies = []
     precisions = []
     recalls = []
     f1s = []
+    aucs = []
     best_checkpoint = 0.
     shapeuse = 0
     preduse = 0
@@ -209,40 +227,50 @@ if __name__ == '__main__':
         valid_pre = 0.
         valid_recall = 0.
         valid_f1 = 0.
+        valid_auc = 0.
+        valid_loss = 0.
         i = 0
-        for valid_data in valid_bar:
-            x_valid, y_valid = valid_data
-            x_valid = x_valid.to(device)
-            y_valid_ = y_valid.clone().detach().numpy().tolist()  # y_valid就不必放到gpu上训练了
-            output = model(x_valid)  # shape:(N*cls_n)
-            output_ = output.clone().detach().cpu()
-            _, pred = torch.max(output_, 1)  # 输出每一行(样本)的最大概率的下标
-            pred_ = pred.clone().detach().numpy().tolist()
-            output_ = output_.numpy().tolist()
-            # 显示每一批次的acc/precision/recall/f1
-            valid_bar.set_description("Epoch:{}/{} Step:{}/{}".format(epoch + 1, args.e, i + 1, len(valid_dl)))
-            prediction = prediction + pred_
-            label = label + y_valid_
-            score = score + output_
-            i += 1
+        with torch.no_grad():
+            for valid_data in valid_bar:
+                x_valid, y_valid = valid_data
+                x_valid = x_valid.to(device)
+                y_valid_ = y_valid.clone().detach().numpy().tolist()  # y_valid就不必放到gpu上训练了
+                output = model(x_valid)  # shape:(N*cls_n)
+                loss = loss_fn(output, y_valid.to(device))
+                valid_loss += loss.clone().detach().cpu().numpy()
+                output_ = output.clone().detach().cpu()
+                _, pred = torch.max(output_, 1)  # 输出每一行(样本)的最大概率的下标
+                pred_ = pred.clone().detach().numpy().tolist()
+                output_ = output_.numpy().tolist()
+                # 显示每一批次的acc/precision/recall/f1
+                valid_bar.set_description("Epoch:{}/{} Step:{}/{}".format(epoch + 1, args.e, i + 1, len(valid_dl)))
+                prediction = prediction + pred_
+                label = label + y_valid_
+                score = score + output_
+                i += 1
         # 最后得到的i是一次迭代中的样本数批数,每一次epoch计算一次indicators
         valid_acc = accuracy_score(y_true=label, y_pred=prediction)
         valid_pre = precision_score(y_true=label, y_pred=prediction, average='weighted')
         valid_recall = recall_score(y_true=label, y_pred=prediction, average='weighted')
         valid_f1 = f1_score(y_true=label, y_pred=prediction, average='weighted')
+        valid_auc = roc_auc_score(y_true=np.eye(args.cn)[np.array(label)], y_score=np.eye(args.cn)[np.array(prediction)], average='weighted', multi_class='ovr')    # numpy-onehot化
+        valid_loss /= i
+
         preduse = prediction
         labeluse = label
         # 验证阶段信息输出
-        indicator_table = PrettyTable(['Accuracy', 'Precision', 'Recall', 'F1'], )
-        indicator_table.add_row([valid_acc, valid_pre, valid_recall, valid_f1])
+        indicator_table = PrettyTable(['Accuracy', 'Precision', 'Recall', 'F1', 'AUC'], )
+        indicator_table.add_row([valid_acc, valid_pre, valid_recall, valid_f1, valid_auc])
         file_logger.info('\n{}\n'.format(indicator_table))
         # indicator保存
         accuracies.append(valid_acc)
         precisions.append(valid_pre)
         recalls.append(valid_recall)
         f1s.append(valid_f1)
+        aucs.append(valid_auc)
+        val_losses.append(valid_loss)
         # 保存最好的f1指标的checkpoint
-        if valid_f1 >= max(f1s):  # 如果本次epoch的f1大于了存储f1列表的最大值，那么最好的checkpoint赋值为model
+        if valid_acc >= max(accuracies):  # 如果本次epoch的acc大于了存储f1列表的最大值，那么最好的checkpoint赋值为model
             best_checkpoint = model
         # 保存每次的checkpoint，从而实现断点继训
         os.makedirs("../checkpoints", exist_ok=True)  # 项目根路径下的checkpoints目录下保存临时checkpoint
@@ -252,18 +280,24 @@ if __name__ == '__main__':
                                                          optimizer)
                 f.write(content)
         torch.save(model, "../checkpoints/{}.pth".format(epoch))
+        # indicators的df记录文件生成
+        df = df_generator(epoch+1, [accuracies, precisions, recalls, f1s, aucs],
+                          os.path.join(log_dir, 'indicators.csv'))
+        # loss的df记录文件生成
+        df_loss = loss_df_generator([losses,val_losses], os.path.join(log_dir,'losses.csv'))
+        # 绘制loss和indicators变化曲线
+        log_plot(df, log_dir)
+        # 绘制loss的变化曲线
+        loss_plot(df_loss, log_dir)
     et = datetime.now()
-    # 训练完，记得把model和优化器也加入到日志中（训练完加入以防训练前对model或者优化器产生影响）
-    file_logger.info("optimizer:\n{}\nmodel:\n{}\n".format(optimizer, model))
     # ----------------------------------------------------------------------------------------------------------------------
     # 完成训练后的断电续训的临时文件的删除、日志保存(程序结束后自动保存)以及绘图等后续工作
-    # 删除临时checkpoints文件以及临时信息文件
-    cmd = input("是否删除临时文件和临时信息文件？[y/n]")
-    if cmd == 'y':
-        shutil.rmtree("../checkpoints")
-    # indicators和loss的df记录文件生成
-    df = df_generator(args.e, [losses, accuracies, precisions, recalls, f1s], os.path.join(log_dir, 'indicators.csv'))
-    # 权重生成(onnx/pth + bestf1/last)
+    # 耗时记录
+    file_logger.info("Training time:{}".format(et - st))
+    # 训练完，记得把model和优化器也加入到日志中（训练完加入以防训练前对model或者优化器产生影响）
+    file_logger.info("optimizer:\n{}\nmodel:\n{}\n".format(str(optimizer), str(model)))
+
+    # 权重生成(onnx/pth + bestacc/last)
     checkpoint_dir = os.path.join(log_dir, 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
     torch.save(model, os.path.join(checkpoint_dir, 'last.pth'))  # 最后一次的checkpoint
@@ -274,17 +308,16 @@ if __name__ == '__main__':
     except:
         file_logger.warning("Last model transforms failed.")
 
-    torch.save(best_checkpoint, os.path.join(checkpoint_dir, 'best_f1.pth'))  # 最好的f1的checkpoint
+    torch.save(best_checkpoint, os.path.join(checkpoint_dir, 'best_acc.pth'))  # 最好的f1的checkpoint
     try:
-        torch2onnx(os.path.join(checkpoint_dir, 'best_f1.pth'), os.path.join(checkpoint_dir, 'best_f1.onnx'), shapeuse)
+        torch2onnx(os.path.join(checkpoint_dir, 'best_acc.pth'), os.path.join(checkpoint_dir, 'best_acc.onnx'), shapeuse)
         file_logger.info(
             "Best model transforms successfully and path is {}.".format(os.path.join(checkpoint_dir, 'best_f1.onnx')))
     except:
         file_logger.warning("Best model transforms failed.")
     # 绘图（当然也可以选择使用提供的函数在训练后绘制，一些参数可以在宝库函数中自行调整）
-    # 1.绘制loss和indicators变化曲线
-    log_plot(df, log_dir)
-    # 2.绘制数据分布图
-    dataset_distribution(args.csvp, args.clsp, log_dir)
-    # 3.绘制最后一次的热力图——当然可以根据自己改预测和标签
+    # 绘制最后一次的热力图——当然可以根据自己改预测和标签
     get_confusion_matrix(y_pred=preduse, y_label=labeluse, cls_num=args.cn, fig_save_dir=log_dir)
+    # 删除临时checkpoints文件以及临时信息文件——到这儿任务基本完成了，就说没没有出现断点，那么就删除
+    shutil.rmtree("../checkpoints")
+
